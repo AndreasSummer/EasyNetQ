@@ -1,27 +1,30 @@
 ﻿// ReSharper disable InconsistentNaming
-
+using RabbitMQ.Client.Framing;
 using System;
 using System.Text;
 using System.Threading;
 using EasyNetQ.Tests.Mocking;
-using NUnit.Framework;
+using Xunit;
 using EasyNetQ.NonGeneric;
-using RabbitMQ.Client.Framing.v0_9_1;
+using FluentAssertions;
 
 namespace EasyNetQ.Tests.NonGeneric
 {
-    [TestFixture]
-    public class NonGenericExtensionsTests
+    public class NonGenericExtensionsTests : IDisposable
     {
         private MockBuilder mockBuilder;
 
-        [SetUp]
-        public void SetUp()
+        public NonGenericExtensionsTests()
         {
             mockBuilder = new MockBuilder();
         }
 
-        [Test]
+        public void Dispose()
+        {
+            mockBuilder.Bus.Dispose();
+        }
+
+        [Fact]
         public void Should_be_able_to_subscribe_using_non_generic_extensions()
         {
             var are = new AutoResetEvent(false);
@@ -37,7 +40,7 @@ namespace EasyNetQ.Tests.NonGeneric
 
             var properties = new BasicProperties
                 {
-                    Type = "EasyNetQ.Tests.MyMessage:EasyNetQ.Tests"
+                    Type = "EasyNetQ.Tests.MyMessage, EasyNetQ.Tests"
                 };
 
             var body = Encoding.UTF8.GetBytes("{ Text:\"Hello World\" }");
@@ -52,8 +55,8 @@ namespace EasyNetQ.Tests.NonGeneric
                 body);
 
             are.WaitOne(1000);
-            deliveredMessage.ShouldNotBeNull();
-            deliveredMessage.Text.ShouldEqual("Hello World");
+            deliveredMessage.Should().NotBeNull();
+            deliveredMessage.Text.Should().Be("Hello World");
         }
     }
 }

@@ -2,29 +2,26 @@
 
 using System;
 using System.Threading;
-using NUnit.Framework;
+using Xunit;
 
 namespace EasyNetQ.Tests.Integration
 {
-    [TestFixture]
     [Explicit("Requires a RabbitMQ broker on localhost")]
-    public class SendReceiveIntegrationTests
+    public class SendReceiveIntegrationTests : IDisposable
     {
         private IBus bus;
 
-        [SetUp]
-        public void SetUp()
+        public SendReceiveIntegrationTests()
         {
             bus = RabbitHutch.CreateBus("host=localhost");
         }
 
-        [TearDown]
-        public void TearDown()
+        public void Dispose()
         {
             bus.Dispose();
         }
 
-        [Test]
+        [Fact]
         public void Should_be_able_to_send_and_receive_messages()
         {
             const string queue = "send_receive_test";
@@ -37,6 +34,35 @@ namespace EasyNetQ.Tests.Integration
             bus.Send(queue, new MyMessage { Text = "Hello Widgets!" });
 
             Thread.Sleep(500);
+        }
+
+        [Fact]
+        public void Should_be_able_to_handle_a_long_running_consumer()
+        {
+            const string queue = "send_receive_test";
+            var are = new AutoResetEvent(false);
+            var waitTime = TimeSpan.FromMinutes(2);
+
+            bus.Receive(queue, x => x.Add<MyMessage>(message =>
+                {
+                    Console.Out.WriteLine("Got message {0}, now working");
+                    Thread.Sleep(TimeSpan.FromMinutes(1));
+                    Console.Out.WriteLine("Completed working, should be sending ACK");
+                    are.Set();
+                }));
+
+//            bus.Receive<MyMessage>(queue, message =>
+//                {
+//                    Console.Out.WriteLine("Got message {0}, now working");
+//                    Thread.Sleep(TimeSpan.FromMinutes(1));
+//                    Console.Out.WriteLine("Completed working, should be sending ACK");
+//                    are.Set();
+//                });
+
+            bus.Send(queue, new MyMessage { Text = "Hello Widgets!" });
+
+            var signalReceived = are.WaitOne(waitTime);
+            Assert.True(signalReceived, $"Expected reset event within {waitTime.TotalSeconds} seconds");
         }
     }
 }

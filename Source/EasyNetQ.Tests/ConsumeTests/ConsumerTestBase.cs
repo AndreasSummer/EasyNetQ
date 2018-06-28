@@ -4,17 +4,15 @@ using System.Threading;
 using System.Threading.Tasks;
 using EasyNetQ.Consumer;
 using EasyNetQ.Events;
-using EasyNetQ.Loggers;
 using EasyNetQ.Tests.Mocking;
 using EasyNetQ.Topology;
-using NUnit.Framework;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Framing.v0_9_1;
-using Rhino.Mocks;
+using RabbitMQ.Client.Framing;
+using NSubstitute;
 
 namespace EasyNetQ.Tests.ConsumeTests
 {
-    public abstract class ConsumerTestBase
+    public abstract class ConsumerTestBase : IDisposable
     {
         protected MockBuilder MockBuilder;
         protected IConsumerErrorStrategy ConsumerErrorStrategy;
@@ -23,31 +21,35 @@ namespace EasyNetQ.Tests.ConsumeTests
         protected MessageProperties DeliveredMessageProperties;
         protected MessageReceivedInfo DeliveredMessageInfo;
         protected bool ConsumerWasInvoked;
+        protected CancellationTokenSource Cancellation;
 
         // populated when a message is delivered
         protected IBasicProperties OriginalProperties;
         protected byte[] OriginalBody;
         protected const ulong DeliverTag = 10101;
 
-        [SetUp]
-        protected void SetUp()
+        public ConsumerTestBase()
         {
-            ConsumerErrorStrategy = MockRepository.GenerateStub<IConsumerErrorStrategy>();
-            ConsumerErrorStrategy.Stub(x => x.PostExceptionAckStrategy()).Return(PostExceptionAckStrategy.ShouldAck);
+            Cancellation = new CancellationTokenSource();
 
-            IConventions conventions = new Conventions(new TypeNameSerializer())
+            ConsumerErrorStrategy = Substitute.For<IConsumerErrorStrategy>();
+            
+            IConventions conventions = new Conventions(new DefaultTypeNameSerializer())
                 {
                     ConsumerTagConvention = () => ConsumerTag
                 };
             MockBuilder = new MockBuilder(x => x
-                    .Register(_ => conventions)
-                    .Register(_ => ConsumerErrorStrategy)
-                    //.Register<IEasyNetQLogger>(_ => new ConsoleLogger())
+                    .Register(conventions)
+                    .Register(ConsumerErrorStrategy)
                 );
 
             AdditionalSetUp();
         }
 
+        public void Dispose()
+        {
+            MockBuilder.Bus.Dispose();
+        }
         protected abstract void AdditionalSetUp();
 
         protected void StartConsumer(Action<byte[], MessageProperties, MessageReceivedInfo> handler)
@@ -62,7 +64,7 @@ namespace EasyNetQ.Tests.ConsumeTests
 
                     handler(body, properties, messageInfo);
                     ConsumerWasInvoked = true;
-                }));
+                }, Cancellation.Token));
         }
 
         protected void DeliverMessage()
@@ -84,7 +86,15 @@ namespace EasyNetQ.Tests.ConsumeTests
                 OriginalBody
                 );
 
+            WaitForMessageDispatchToBegin();
             WaitForMessageDispatchToComplete();
+        }
+
+        private void WaitForMessageDispatchToBegin()
+        {
+            var autoResetEvent = new AutoResetEvent(false);
+            MockBuilder.EventBus.Subscribe<DeliveredMessageEvent>(x => autoResetEvent.Set());
+            autoResetEvent.WaitOne(1000);
         }
 
         protected void WaitForMessageDispatchToComplete()

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 
 namespace EasyNetQ
 {
@@ -51,13 +52,13 @@ namespace EasyNetQ
         /// Thrown if <paramref name="name"/> or <paramref name="message"/> are
         /// blank.
         /// </exception>
-        public static void CheckNotNull<T>(T value, string name, string message) where T : class 
+        public static void CheckNotNull<T>(T value, string name, string message) where T : class
         {
-            CheckNotBlank(name, "name", "name must not be blank");
-            CheckNotBlank(message, "message", "message must not be blank");
-
             if (value == null)
             {
+                CheckNotBlank(name, "name", "name must not be blank");
+                CheckNotBlank(message, "message", "message must not be blank");
+
                 throw new ArgumentNullException(name, message);
             }
         }
@@ -138,11 +139,11 @@ namespace EasyNetQ
         /// </exception>
         public static void CheckAny<T>(IEnumerable<T> collection, string name, string message)
         {
-            CheckNotBlank(name, "name", "name must not be blank");
-            CheckNotBlank(message, "message", "message must not be blank");
-
             if (collection == null || !collection.Any())
             {
+                CheckNotBlank(name, "name", "name must not be blank");
+                CheckNotBlank(message, "message", "message must not be blank");
+
                 throw new ArgumentException(message, name);
             }
         }
@@ -167,11 +168,11 @@ namespace EasyNetQ
         /// </exception>
         public static void CheckTrue(bool value, string name, string message)
         {
-            CheckNotBlank(name, "name", "name must not be blank");
-            CheckNotBlank(message, "message", "message must not be blank");
-
             if (!value)
             {
+                CheckNotBlank(name, "name", "name must not be blank");
+                CheckNotBlank(message, "message", "message must not be blank");
+
                 throw new ArgumentException(message, name);
             }
         }
@@ -196,11 +197,11 @@ namespace EasyNetQ
         /// </exception>
         public static void CheckFalse(bool value, string name, string message)
         {
-            CheckNotBlank(name, "name", "name must not be blank");
-            CheckNotBlank(message, "message", "message must not be blank");
-
             if (value)
             {
+                CheckNotBlank(name, "name", "name must not be blank");
+                CheckNotBlank(message, "message", "message must not be blank");
+
                 throw new ArgumentException(message, name);
             }
         }
@@ -210,8 +211,34 @@ namespace EasyNetQ
             CheckNotNull(value, name);
             if (value.Length > 255)
             {
-                throw new ArgumentException(string.Format("Argument {0} must be less than or equal to 255 characters."));
+                throw new ArgumentException(string.Format("Argument '{0}' must be less than or equal to 255 characters.", name));
             }
+        }
+
+        public static void CheckTypeMatches(Type expectedType, object value, string name, string message)
+        {
+            bool assignable = expectedType.IsAssignableFrom(value.GetType());
+            if (!assignable)
+            {
+                CheckNotBlank(name, "name", "name must not be blank");
+                CheckNotBlank(message, "message", "message must not be blank");
+
+                throw new ArgumentException(message, name);
+            }
+        }
+
+        public static void CheckLess(TimeSpan value, TimeSpan maxValue, string name)
+        {
+            if (value < maxValue)
+                return;
+            throw new ArgumentOutOfRangeException(name, string.Format("Arguments {0} must be less than maxValue", name));
+        }
+
+        public static void CheckNull<T>(T value, string name)
+        {
+            if (value == null)
+                return;
+            throw new ArgumentException(string.Format("{0} must not be null", name), name);
         }
     }
 }

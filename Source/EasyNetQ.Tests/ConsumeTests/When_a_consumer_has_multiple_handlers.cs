@@ -1,15 +1,16 @@
 ﻿// ReSharper disable InconsistentNaming
-
+using System;
 using System.Threading;
+using EasyNetQ.Internals;
 using EasyNetQ.Tests.Mocking;
 using EasyNetQ.Topology;
-using NUnit.Framework;
-using RabbitMQ.Client.Framing.v0_9_1;
+using FluentAssertions;
+using RabbitMQ.Client.Framing;
+using Xunit;
 
 namespace EasyNetQ.Tests.ConsumeTests
 {
-    [TestFixture]
-    public class When_a_consumer_has_multiple_handlers
+    public class When_a_consumer_has_multiple_handlers : IDisposable
     {
         private MockBuilder mockBuilder;
 
@@ -17,8 +18,7 @@ namespace EasyNetQ.Tests.ConsumeTests
         private MyOtherMessage myOtherMessageResult;
         private IAnimal animalResult;
 
-        [SetUp]
-        public void SetUp()
+        public When_a_consumer_has_multiple_handlers()
         {
             mockBuilder = new MockBuilder();
 
@@ -50,12 +50,17 @@ namespace EasyNetQ.Tests.ConsumeTests
             countdownEvent.Wait(1000);
         }
 
-        public void Deliver<T>(T message) where T : class
+        public void Dispose()
         {
-            var body = new JsonSerializer(new TypeNameSerializer()).MessageToBytes(message);
+            mockBuilder.Bus.Dispose();
+        }
+
+        void Deliver<T>(T message) where T : class
+        {
+            var body = new JsonSerializer().MessageToBytes(message);
             var properties = new BasicProperties
             {
-                Type = new TypeNameSerializer().Serialize(typeof(T))
+                Type = new DefaultTypeNameSerializer().Serialize(typeof(T))
             };
 
             mockBuilder.Consumers[0].HandleBasicDeliver(
@@ -69,25 +74,25 @@ namespace EasyNetQ.Tests.ConsumeTests
                 );
         }
 
-        [Test]
+        [Fact]
         public void Should_deliver_myMessage()
         {
-            myMessageResult.ShouldNotBeNull();
-            myMessageResult.Text.ShouldEqual("Hello Polymorphs!");
+            myMessageResult.Should().NotBeNull();
+            myMessageResult.Text.Should().Be("Hello Polymorphs!");
         }
 
-        [Test]
+        [Fact]
         public void Should_deliver_myOtherMessage()
         {
-            myOtherMessageResult.ShouldNotBeNull();
-            myOtherMessageResult.Text.ShouldEqual("Hello Isomorphs!");
+            myOtherMessageResult.Should().NotBeNull();
+            myOtherMessageResult.Text.Should().Be("Hello Isomorphs!");
         }
 
-        [Test]
+        [Fact]
         public void Should_deliver_a_ploymorphic_message()
         {
-            animalResult.ShouldNotBeNull();
-            animalResult.ShouldBeOfType<Dog>();
+            animalResult.Should().NotBeNull();
+            animalResult.Should().BeOfType<Dog>();
         }
     }
 }

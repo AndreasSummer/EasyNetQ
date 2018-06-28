@@ -1,15 +1,17 @@
-﻿using EasyNetQ.Consumer;
-
-namespace EasyNetQ.Events
+﻿namespace EasyNetQ.Events
 {
     public class AckEvent
     {
-        public ConsumerExecutionContext ConsumerExecutionContext { get; private set; }
-        public AckResult AckResult { get; private set; }
+        public MessageReceivedInfo ReceivedInfo { get; }
+        public MessageProperties Properties { get; }
+        public byte[] Body { get; }
+        public AckResult AckResult { get; }
 
-        public AckEvent(ConsumerExecutionContext consumerExecutionContext, AckResult ackResult)
+        public AckEvent(MessageReceivedInfo info, MessageProperties properties, byte[] body , AckResult ackResult)
         {
-            ConsumerExecutionContext = consumerExecutionContext;
+            ReceivedInfo = info;
+            Properties = properties;
+            Body = body;
             AckResult = ackResult;
         }
     }

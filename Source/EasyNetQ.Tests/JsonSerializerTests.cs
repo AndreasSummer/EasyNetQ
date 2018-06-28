@@ -1,26 +1,24 @@
-﻿// ReSharper disable InconsistentNaming
-
+﻿using System.Collections.Generic;
+using FluentAssertions;
+using RabbitMQ.Client.Framing;
+// ReSharper disable InconsistentNaming
 using System;
-using System.Collections;
 using System.Text;
-using NUnit.Framework;
+using Xunit;
 using RabbitMQ.Client;
-using BasicProperties = RabbitMQ.Client.Framing.v0_8.BasicProperties;
 
 namespace EasyNetQ.Tests
 {
-    [TestFixture]
     public class JsonSerializerTests
     {
         private ISerializer serializer;
 
-        [SetUp]
-        public void SetUp()
+        public JsonSerializerTests()
         {
-            serializer = new JsonSerializer(new TypeNameSerializer());
+            serializer = new JsonSerializer();
         }
 
-        [Test]
+        [Fact]
         public void Should_be_able_to_serialize_and_deserialize_a_message()
         {
             var message = new MyMessage {Text = "Hello World"};
@@ -28,10 +26,10 @@ namespace EasyNetQ.Tests
             var binaryMessage = serializer.MessageToBytes(message);
             var deseralizedMessage = serializer.BytesToMessage<MyMessage>(binaryMessage);
 
-            message.Text.ShouldEqual(deseralizedMessage.Text);
+            message.Text.Should().Be(deseralizedMessage.Text);
         }
 
-        [Test]
+        [Fact]
         public void Should_be_able_to_serialize_basic_properties()
         {
             var originalProperties = new BasicProperties
@@ -49,7 +47,7 @@ namespace EasyNetQ.Tests
                 Timestamp = new AmqpTimestamp(123344044),
                 Type = "Type",
                 UserId = "user id",
-                Headers = new Hashtable
+                Headers = new Dictionary<string, object>
                 {
                     {"one", "header one"},
                     {"two", "header two"}
@@ -70,7 +68,7 @@ namespace EasyNetQ.Tests
                 return builder.ToString();
             };
 
-            getPropertiesString(originalProperties).ShouldEqual(getPropertiesString(newProperties));
+            getPropertiesString(originalProperties).Should().Be(getPropertiesString(newProperties));
         }
 
         class A { }
@@ -80,25 +78,23 @@ namespace EasyNetQ.Tests
             public A AorB { get; set; }
         }
 
-        [Test]
+        [Fact]
         public void Should_be_able_to_serialize_and_deserialize_polymorphic_properties()
         {
             var bytes = serializer.MessageToBytes<PolyMessage>(new PolyMessage { AorB = new B() });
 
             var result = serializer.BytesToMessage<PolyMessage>(bytes);
 
-            Assert.IsInstanceOf<B>(result.AorB);
+            Assert.IsType<B>(result.AorB);
         }
 
-        [Test]
+        [Fact]
         public void Should_be_able_to_serialize_and_deserialize_polymorphic_properties_when_using_TypeNameSerializer()
         {
-            var typeName = new TypeNameSerializer().Serialize(typeof (PolyMessage));
-
             var bytes = serializer.MessageToBytes(new PolyMessage { AorB = new B() });
-            var result = (PolyMessage)serializer.BytesToMessage(typeName, bytes);
+            var result = (PolyMessage)serializer.BytesToMessage(typeof(PolyMessage), bytes);
 
-            Assert.IsInstanceOf<B>(result.AorB);
+            Assert.IsType<B>(result.AorB);
         }
     }
 }

@@ -1,118 +1,215 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient;
+using System.Data.Common;
 using System.Threading;
 using EasyNetQ.SystemMessages;
+using log4net;
+using Newtonsoft.Json;
 
 namespace EasyNetQ.Scheduler
 {
     public interface IScheduleRepository
     {
         void Store(ScheduleMe scheduleMe);
+        void Cancel(UnscheduleMe unscheduleMe);
         IList<ScheduleMe> GetPending();
         void Purge();
     }
 
     public class ScheduleRepository : IScheduleRepository
     {
-        private const string insertSql = "uspAddNewMessageToScheduler";
-        private const string selectSql = "uspGetNextBatchOfMessages";
-        private const string purgeSql = "uspWorkItemsSelfPurge";
-        private const string markForPurgeSql = "uspMarkWorkItemForPurge";
-
+        private readonly ILog logger = LogManager.GetLogger(typeof(ScheduleRepository));
+        
         private readonly ScheduleRepositoryConfiguration configuration;
-        private readonly Func<DateTime> now; 
+        private readonly Func<DateTime> now;
+        private readonly ISqlDialect dialect;
 
         public ScheduleRepository(ScheduleRepositoryConfiguration configuration, Func<DateTime> now)
         {
             this.configuration = configuration;
             this.now = now;
+            dialect = SqlDialectResolver.Resolve(configuration.ProviderName);
         }
 
         public void Store(ScheduleMe scheduleMe)
         {
-            WithStoredProcedureCommand(insertSql, command =>
+            WithStoredProcedureCommand(dialect.InsertProcedureName, command =>
             {
-                command.Parameters.AddWithValue("@WakeTime", scheduleMe.WakeTime);
-                command.Parameters.AddWithValue("@BindingKey", scheduleMe.BindingKey);
-                command.Parameters.AddWithValue("@Message", scheduleMe.InnerMessage);
+                AddParameter(command, dialect.WakeTimeParameterName, scheduleMe.WakeTime, DbType.DateTime);
+                AddParameter(command, dialect.BindingKeyParameterName, scheduleMe.BindingKey, DbType.String);
+                AddParameter(command, dialect.CancellationKeyParameterName, scheduleMe.CancellationKey, DbType.String);
+                AddParameter(command, dialect.MessageParameterName, scheduleMe.InnerMessage, DbType.Binary);
+                AddParameter(command, dialect.ExchangeParameterName, scheduleMe.Exchange, DbType.String);
+                AddParameter(command, dialect.ExchangeTypeParameterName, scheduleMe.ExchangeType, DbType.String);
+                AddParameter(command, dialect.RoutingKeyParameterName, scheduleMe.RoutingKey, DbType.String);
+                AddParameter(command, dialect.MessagePropertiesParameterName, SerializeToString(scheduleMe.MessageProperties), DbType.String);
+                AddParameter(command, dialect.InstanceNameParameterName, configuration.InstanceName, DbType.String);
 
                 command.ExecuteNonQuery();
             });
         }
 
-        public IList<ScheduleMe> GetPending()
+        public void Cancel(UnscheduleMe unscheduleMe)
         {
-            var scheduledMessages = new List<ScheduleMe>();
-            var scheuldeMessageIds = new List<int>();
-
-            WithStoredProcedureCommand(selectSql, command =>
-            {
-                command.Parameters.AddWithValue("@WakeTime", now());
-                command.Parameters.AddWithValue("@rows", configuration.MaximumScheduleMessagesToReturn);
-
-                using(var reader = command.ExecuteReader())
+            ThreadPool.QueueUserWorkItem(state =>
+                WithStoredProcedureCommand(dialect.CancelProcedureName, command =>
                 {
-                    while (reader.Read())
+                    try
                     {
-                        scheduledMessages.Add(new ScheduleMe
-                        {
-                            WakeTime = reader.GetDateTime(2),
-                            BindingKey = reader.GetString(3),
-                            InnerMessage = reader.GetSqlBinary(4).Value
-                        });
-
-                        scheuldeMessageIds.Add(reader.GetInt32(0));
-                    }
-                }
-            });
-
-            MarkItemsForPurge(scheuldeMessageIds);
-
-            return scheduledMessages;
-        }
-
-        public void MarkItemsForPurge(IEnumerable<int> scheuldeMessageIds)
-        {
-            // mark items for purge on a background thread.
-            ThreadPool.QueueUserWorkItem(state => 
-                WithStoredProcedureCommand(markForPurgeSql, command =>
-                {
-                    var purgeDate = now().AddDays(configuration.PurgeDelayDays);
-
-                    command.Parameters.AddWithValue("@purgeDate", purgeDate);
-                    var idParameter = command.Parameters.Add("@ID", SqlDbType.Int);
-
-                    foreach (var scheduleMessageId in scheuldeMessageIds)
-                    {
-                        idParameter.Value = scheduleMessageId;
+                        AddParameter(command, dialect.CancellationKeyParameterName, unscheduleMe.CancellationKey, DbType.String);
                         command.ExecuteNonQuery();
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.ErrorFormat("ScheduleRepository.Cancel threw an exception {0}", ex);
                     }
                 })
             );
         }
 
-        public void Purge()
+        public IList<ScheduleMe> GetPending()
         {
-            WithStoredProcedureCommand(purgeSql, command =>
-            {
-                command.Parameters.AddWithValue("@rows", configuration.PurgeBatchSize);
+            var scheduledMessages = new List<ScheduleMe>();
+            var scheduleMessageIds = new List<int>();
 
-                command.ExecuteNonQuery();
+            WithStoredProcedureCommand(dialect.SelectProcedureName, command =>
+            {
+                var dateTime = now();
+                AddParameter(command, dialect.RowsParameterName, configuration.MaximumScheduleMessagesToReturn, DbType.Int32);
+                AddParameter(command, dialect.StatusParameterName, 0, DbType.Int16);
+                AddParameter(command, dialect.WakeTimeParameterName, dateTime, DbType.DateTime);
+                AddParameter(command, dialect.InstanceNameParameterName, configuration.InstanceName ?? "", DbType.String);
+
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        scheduledMessages.Add(new ScheduleMe
+                        {
+                            WakeTime = (DateTime) reader["WakeTime"],
+                            BindingKey = reader["BindingKey"].ToString(),
+                            InnerMessage = (byte[])reader["InnerMessage"],
+                            CancellationKey = reader["CancellationKey"].ToString(),
+                            Exchange = reader["Exchange"].ToString(),
+                            ExchangeType = reader["ExchangeType"].ToString(),
+                            RoutingKey = reader["RoutingKey"].ToString(),
+                            MessageProperties = DeserializeToMessageProperties(reader["MessageProperties"].ToString()),
+                        });
+
+                        scheduleMessageIds.Add((int)reader["WorkItemId"]);
+                    }
+                }
             });
+
+            MarkItemsForPurge(scheduleMessageIds);
+
+            return scheduledMessages;
         }
 
-        private void WithStoredProcedureCommand(string storedProcedureName, Action<SqlCommand> commandAction)
+        public void MarkItemsForPurge(IEnumerable<int> scheduleMessageIds)
         {
-            using (var connection = new SqlConnection(configuration.ConnectionString))
-            using (var command = new SqlCommand(storedProcedureName, connection))
-            {
-                connection.Open();
-                command.CommandType = CommandType.StoredProcedure;
+            // mark items for purge on a background thread.
+            ThreadPool.QueueUserWorkItem(state =>
+                WithStoredProcedureCommand(dialect.MarkForPurgeProcedureName, command =>
+                {
+                    try
+                    {
+                        var purgeDate = now().AddDays(configuration.PurgeDelayDays);
 
+                        var idParameter = AddParameter(command, dialect.IdParameterName, DbType.Int32);
+                        AddParameter(command, dialect.PurgeDateParameterName, purgeDate, DbType.DateTime);
+
+                        foreach (var scheduleMessageId in scheduleMessageIds)
+                        {
+                            idParameter.Value = scheduleMessageId;
+                            command.ExecuteNonQuery();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.ErrorFormat("ScheduleRepository.MarkItemsForPurge threw an exception {0}", ex);
+                    }
+                })
+            );
+        }
+
+        private static MessageProperties DeserializeToMessageProperties(string properties)
+        {
+            // backwards compatibility with older messages
+            if (string.IsNullOrWhiteSpace(properties))
+                return null;
+            return JsonConvert.DeserializeObject<MessageProperties>(properties);
+        }
+
+        private static string SerializeToString(MessageProperties properties)
+        {
+            if (properties == null)
+                throw new ArgumentNullException("properties");
+            return JsonConvert.SerializeObject(properties);
+        }
+
+        public void Purge()
+        {
+            WithStoredProcedureCommand(dialect.PurgeProcedureName, command =>
+                {
+                    AddParameter(command, dialect.RowsParameterName, configuration.PurgeBatchSize, DbType.Int16);
+                    AddParameter(command, dialect.PurgeDateParameterName, now(), DbType.DateTime);
+
+                    command.ExecuteNonQuery();
+                });
+        }
+
+        private void WithStoredProcedureCommand(string storedProcedureName, Action<IDbCommand> commandAction)
+        {
+            using (var connection = GetConnection())
+            using (var command = CreateCommand(connection, FormatWithSchemaName(storedProcedureName)))
+            {
+                command.CommandType = CommandType.StoredProcedure;
                 commandAction(command);
             }
+        }
+
+        private string FormatWithSchemaName(string storedProcedureName)
+        {
+            if (string.IsNullOrWhiteSpace(configuration.SchemaName))
+                return storedProcedureName;
+
+            return string.Format("[{0}].{1}", configuration.SchemaName.TrimStart('[').TrimEnd('.', ']'), storedProcedureName);
+        }
+
+        private IDbConnection GetConnection()
+        {
+            var factory = DbProviderFactories.GetFactory(configuration.ProviderName);
+            var connection = factory.CreateConnection();
+            connection.ConnectionString = configuration.ConnectionString;
+            connection.Open();
+            return connection;
+        }
+
+        private IDbCommand CreateCommand(IDbConnection connection, string commandText)
+        {
+            var command = connection.CreateCommand();
+            command.CommandText = commandText;
+            return command;
+        }
+
+        private void AddParameter(IDbCommand command, string parameterName, object value, DbType dbType)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = parameterName;
+            parameter.Value = value;
+            parameter.DbType = dbType;
+            command.Parameters.Add(parameter);
+        }
+
+        private IDbDataParameter AddParameter(IDbCommand command, string parameterName, DbType dbType)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = parameterName;
+            parameter.DbType = dbType;
+            command.Parameters.Add(parameter);
+            return parameter;
         }
     }
 }

@@ -14,18 +14,17 @@ namespace EasyNetQ.ConnectionString
         public static Parser<string> Text = Parse.CharExcept(';').Many().Text();
         public static Parser<ushort> Number = Parse.Number.Select(ushort.Parse);
 
-        public static Parser<bool> Bool =
-            (Parse.String("true").Or(Parse.String("false"))).Text().Select(x => x == "true");
+        public static Parser<bool> Bool = (Parse.CaseInsensitiveString("true").Or(Parse.CaseInsensitiveString("false"))).Text().Select(x => x.ToLower() == "true");
 
-        public static Parser<IHostConfiguration> Host =
+        public static Parser<HostConfiguration> Host =
             from host in Parse.Char(c => c != ':' && c != ';' && c != ',', "host").Many().Text()
             from port in Parse.Char(':').Then(_ => Number).Or(Parse.Return((ushort)0))
-            select new HostConfiguration {Host = host, Port = port};
+            select new HostConfiguration { Host = host, Port = port };
 
-        public static Parser<IEnumerable<IHostConfiguration>> Hosts = Host.ListDelimitedBy(',');
+        public static Parser<IEnumerable<HostConfiguration>> Hosts = Host.ListDelimitedBy(',');
 
-        private static Uri result;
-        public static Parser<Uri> AMQP = Parse.CharExcept(';').Many().Text().Where(x => Uri.TryCreate(x,UriKind.Absolute, out result)).Select(_ => new Uri(_));
+        private static Uri _result;
+        public static Parser<Uri> AMQP = Parse.CharExcept(';').Many().Text().Where(x => Uri.TryCreate(x, UriKind.Absolute, out _result)).Select(_ => new Uri(_));
 
         public static Parser<UpdateConfiguration> Part = new List<Parser<UpdateConfiguration>>
         {
@@ -39,11 +38,16 @@ namespace EasyNetQ.ConnectionString
             BuildKeyValueParser("password", Text, c => c.Password),
             BuildKeyValueParser("prefetchcount", Number, c => c.PrefetchCount),
             BuildKeyValueParser("timeout", Number, c => c.Timeout),
-            BuildKeyValueParser("publisherConfirms", Bool, c => c.PublisherConfirms)
+            BuildKeyValueParser("publisherConfirms", Bool, c => c.PublisherConfirms),
+            BuildKeyValueParser("persistentMessages", Bool, c => c.PersistentMessages),
+            BuildKeyValueParser("product", Text, c => c.Product),
+            BuildKeyValueParser("platform", Text, c => c.Platform),
+            BuildKeyValueParser("useBackgroundThreads", Bool, c => c.UseBackgroundThreads),
+            BuildKeyValueParser("name", Text, c => c.Name)
         }.Aggregate((a, b) => a.Or(b));
 
         public static Parser<UpdateConfiguration> AMQPAlone =
-            AMQP.Select(_ => (Func<ConnectionConfiguration, ConnectionConfiguration>) (configuration
+            AMQP.Select(_ => (Func<ConnectionConfiguration, ConnectionConfiguration>)(configuration
                                                                                        =>
                 {
                     configuration.AMQPConnectionString = _;
@@ -94,9 +98,15 @@ namespace EasyNetQ.ConnectionString
             Preconditions.CheckNotNull(property, "getter", "Member is not a property.");
             Preconditions.CheckTrue(property.CanWrite, "getter", "Member is not a writeable property.");
 
+#if !NETFX
+            return (Action<TContaining, TProperty>)property.GetSetMethod().CreateDelegate(typeof(Action<TContaining, TProperty>));
+            
+#else
             return (Action<TContaining, TProperty>)
                 Delegate.CreateDelegate(typeof(Action<TContaining, TProperty>),
                     property.GetSetMethod());
+#endif
+
         }
 
         public static IEnumerable<T> Cons<T>(this T head, IEnumerable<T> rest)
@@ -112,6 +122,6 @@ namespace EasyNetQ.ConnectionString
                 from head in parser
                 from tail in Parse.Char(delimiter).Then(_ => parser).Many()
                 select head.Cons(tail);
-        } 
+        }
     }
 }

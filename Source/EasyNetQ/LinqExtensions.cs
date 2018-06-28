@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -22,12 +21,6 @@ namespace EasyNetQ
             }
         }
 
-        public static IEnumerable<KeyValuePair<string, string>> EnumerateDictionary(this IDictionary dictionary)
-        {
-            return from DictionaryEntry entry in dictionary 
-                   select new KeyValuePair<string, string>(entry.Key.ToString(), entry.Value.ToString());
-        }
-
         public static IEnumerable<T> SurroundWith<T>(this IEnumerable<T> items, T first, T last)
         {
             yield return first;
@@ -38,18 +31,26 @@ namespace EasyNetQ
             yield return last;
         }
 
-        public static IEnumerable<T> AtLeastOneWithDefault<T>(this IEnumerable<T> items, T @default)
+        public static void Shuffle<T>(this IList<T> list)
         {
-            var zeroItems = true;
-            foreach (var item in items)
+            var n = list.Count;
+            while (n > 1)
             {
-                yield return item;
-                zeroItems = false;
-            }
-            if (zeroItems)
-            {
-                yield return @default;
+                n--;
+                var k = Random.Next(n + 1);
+                var value = list[k];
+                list[k] = list[n];
+                list[n] = value;
             }
         }
+
+        internal static string Stringify(this IDictionary<string, object> source)
+        {
+            return string.Join(", ", source.Select(kvp => $"{kvp.Key}={kvp.Value}"));
+        }
+
+        [ThreadStatic] private static Random random;
+
+        private static Random Random => random ?? (random = new Random(Environment.TickCount));
     }
 }

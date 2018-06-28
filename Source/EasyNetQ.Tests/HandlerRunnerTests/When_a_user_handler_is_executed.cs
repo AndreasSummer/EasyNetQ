@@ -5,40 +5,34 @@ using System.Threading;
 using System.Threading.Tasks;
 using EasyNetQ.Consumer;
 using EasyNetQ.Events;
-using EasyNetQ.Loggers;
-using NUnit.Framework;
+using FluentAssertions;
+using Xunit;
 using RabbitMQ.Client;
-using Rhino.Mocks;
+using NSubstitute;
 
 namespace EasyNetQ.Tests.HandlerRunnerTests
 {
-    [TestFixture]
     public class When_a_user_handler_is_executed
     {
-        private IHandlerRunner handlerRunner;
+        private byte[] deliveredBody;
+        private MessageProperties deliveredProperties;
+        private MessageReceivedInfo deliveredInfo;
 
-        byte[] deliveredBody = null;
-        MessageProperties deliveredProperties = null;
-        MessageReceivedInfo deliveredInfo = null;
-
-        readonly MessageProperties messageProperties = new MessageProperties
+        private readonly MessageProperties messageProperties = new MessageProperties
             {
                 CorrelationId = "correlation_id"
             };
-        readonly MessageReceivedInfo messageInfo = new MessageReceivedInfo("consumer_tag", 123, false, "exchange", "routingKey", "queue");
-        readonly byte[] messageBody = new byte[0];
+        private readonly MessageReceivedInfo messageInfo = new MessageReceivedInfo("consumer_tag", 123, false, "exchange", "routingKey", "queue");
+        private readonly byte[] messageBody = new byte[0];
 
-        private IModel channel;
+        private readonly IModel channel;
 
-        [SetUp]
-        public void SetUp()
+        public When_a_user_handler_is_executed()
         {
-            //var logger = new ConsoleLogger();
-            var logger = MockRepository.GenerateStub<IEasyNetQLogger>();
-            var consumerErrorStrategy = MockRepository.GenerateStub<IConsumerErrorStrategy>();
+            var consumerErrorStrategy = Substitute.For<IConsumerErrorStrategy>();
             var eventBus = new EventBus();
 
-            handlerRunner = new HandlerRunner(logger, consumerErrorStrategy, eventBus);
+            var handlerRunner = new HandlerRunner(consumerErrorStrategy, eventBus);
 
             Func<byte[], MessageProperties, MessageReceivedInfo, Task> userHandler = (body, properties, info) => 
                 Task.Factory.StartNew(() =>
@@ -48,9 +42,9 @@ namespace EasyNetQ.Tests.HandlerRunnerTests
                         deliveredInfo = info;
                     });
 
-            var consumer = MockRepository.GenerateStub<IBasicConsumer>();
-            channel = MockRepository.GenerateStub<IModel>();
-            consumer.Stub(x => x.Model).Return(channel).Repeat.Any();
+            var consumer = Substitute.For<IBasicConsumer>();
+            channel = Substitute.For<IModel>();
+            consumer.Model.Returns(channel);
 
             var context = new ConsumerExecutionContext(
                 userHandler, messageInfo, messageProperties, messageBody, consumer);
@@ -63,28 +57,28 @@ namespace EasyNetQ.Tests.HandlerRunnerTests
             autoResetEvent.WaitOne(1000);
         }
 
-        [Test]
+        [Fact]
         public void Should_deliver_body()
         {
-            deliveredBody.ShouldBeTheSameAs(messageBody);
+            deliveredBody.Should().BeSameAs(messageBody);
         }
 
-        [Test]
+        [Fact]
         public void Should_deliver_properties()
         {
-            deliveredProperties.ShouldBeTheSameAs(messageProperties);
+            deliveredProperties.Should().BeSameAs(messageProperties);
         }
 
-        [Test]
+        [Fact]
         public void Should_deliver_info()
         {
-            deliveredInfo.ShouldBeTheSameAs(messageInfo);
+            deliveredInfo.Should().BeSameAs(messageInfo);
         }
 
-        [Test]
+        [Fact]
         public void Should_ACK_message()
         {
-            channel.AssertWasCalled(x => x.BasicAck(123, false));
+            channel.Received().BasicAck(123, false);
         }
     }
 }

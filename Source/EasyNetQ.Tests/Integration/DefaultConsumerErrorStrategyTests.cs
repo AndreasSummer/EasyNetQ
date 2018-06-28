@@ -5,17 +5,14 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using EasyNetQ.Consumer;
-using EasyNetQ.Loggers;
 using EasyNetQ.SystemMessages;
-using NUnit.Framework;
+using FluentAssertions;
+using NSubstitute;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
-using RabbitMQ.Client.Framing.v0_9_1;
-using Rhino.Mocks;
+using Xunit;
 
-namespace EasyNetQ.Tests
+namespace EasyNetQ.Tests.Integration
 {
-    [TestFixture]
     public class DefaultConsumerErrorStrategyTests
     {
         private DefaultConsumerErrorStrategy consumerErrorStrategy;
@@ -23,12 +20,11 @@ namespace EasyNetQ.Tests
         private ISerializer serializer;
         private IConventions conventions;
 
-        [SetUp]
-        public void SetUp()
+        public DefaultConsumerErrorStrategyTests()
         {
             var configuration = new ConnectionConfiguration
             {
-                Hosts = new List<IHostConfiguration>
+                Hosts = new List<HostConfiguration>
                 {
                     new HostConfiguration { Host = "localhost", Port = 5672 }
                 },
@@ -38,23 +34,24 @@ namespace EasyNetQ.Tests
 
             configuration.Validate();
 
-            var typeNameSerializer = new TypeNameSerializer();
-            connectionFactory = new ConnectionFactoryWrapper(configuration, new DefaultClusterHostSelectionStrategy<ConnectionFactoryInfo>());
-            serializer = new JsonSerializer(typeNameSerializer);
+            var typeNameSerializer = new DefaultTypeNameSerializer();
+            var errorMessageSerializer = new DefaultErrorMessageSerializer();
+            connectionFactory = new ConnectionFactoryWrapper(configuration, new RandomClusterHostSelectionStrategy<ConnectionFactoryInfo>());
+            serializer = new JsonSerializer();
             conventions = new Conventions(typeNameSerializer);
             consumerErrorStrategy = new DefaultConsumerErrorStrategy(
                 connectionFactory, 
                 serializer, 
-                new ConsoleLogger(), 
                 conventions,
-                typeNameSerializer);
+                typeNameSerializer,
+                errorMessageSerializer);
          
         }
 
         /// <summary>
         /// NOTE: Make sure the error queue is empty before running this test.
         /// </summary>
-        [Test, Explicit("Requires a RabbitMQ instance on localhost")]
+        [Fact][Explicit("Requires a RabbitMQ instance on localhost")]
         public void Should_handle_an_exception_by_writing_to_the_error_queue()
         {
             const string originalMessage = "{ Text:\"Hello World\"}";
@@ -71,7 +68,7 @@ namespace EasyNetQ.Tests
                     AppId = "456"
                 },
                 originalMessageBody,
-                MockRepository.GenerateStub<IBasicConsumer>()
+                Substitute.For<IBasicConsumer>()
                 );
 
             consumerErrorStrategy.HandleConsumerError(context, exception);
@@ -85,28 +82,59 @@ namespace EasyNetQ.Tests
                 var getArgs = model.BasicGet(conventions.ErrorQueueNamingConvention(), true);
                 if (getArgs == null)
                 {
-                    Assert.Fail("Nothing on the error queue");
+                    Assert.True(false, "Nothing on the error queue");
                 }
                 else
                 {
                     var message = serializer.BytesToMessage<Error>(getArgs.Body);
 
-                    message.RoutingKey.ShouldEqual(context.Info.RoutingKey);
-                    message.Exchange.ShouldEqual(context.Info.Exchange);
-                    message.Message.ShouldEqual(originalMessage);
-                    message.Exception.ShouldEqual("System.Exception: I just threw!");
-                    message.DateTime.Date.ShouldEqual(DateTime.Now.Date);
-                    message.BasicProperties.CorrelationId.ShouldEqual(context.Properties.CorrelationId);
-                    message.BasicProperties.AppId.ShouldEqual(context.Properties.AppId);
+                    message.RoutingKey.Should().Be(context.Info.RoutingKey);
+                    message.Exchange.Should().Be(context.Info.Exchange);
+                    message.Message.Should().Be(originalMessage);
+                    message.Exception.Should().Be("System.Exception: I just threw!");
+                    message.DateTime.Date.Should().Be(DateTime.UtcNow.Date);
+                    message.BasicProperties.CorrelationId.Should().Be(context.Properties.CorrelationId);
+                    message.BasicProperties.AppId.Should().Be(context.Properties.AppId);
                 }
             }
         }
 
-        [Test]
-        public void Should_ack_after_exception_is_handled()
+        [Fact]
+        public void Should_not_reconnect_if_has_been_disposed()
         {
-            consumerErrorStrategy.PostExceptionAckStrategy()
-                .ShouldEqual(PostExceptionAckStrategy.ShouldAck);
+            const string originalMessage = "{ Text:\"Hello World\"}";
+            var originalMessageBody = Encoding.UTF8.GetBytes(originalMessage);
+
+            var exception = new Exception("I just threw!");
+
+            var context = new ConsumerExecutionContext(
+                (bytes, properties, arg3) => null,
+                new MessageReceivedInfo("consumertag", 0, false, "orginalExchange", "originalRoutingKey", "queue"),
+                new MessageProperties
+                {
+                    CorrelationId = "123",
+                    AppId = "456"
+                },
+                originalMessageBody,
+                Substitute.For<IBasicConsumer>()
+                );
+
+            connectionFactory = Substitute.For<IConnectionFactory>();
+
+            consumerErrorStrategy = new DefaultConsumerErrorStrategy(
+                connectionFactory,
+                Substitute.For<ISerializer>(),
+                Substitute.For<IConventions>(),
+                Substitute.For<ITypeNameSerializer>(),
+                Substitute.For<IErrorMessageSerializer>());
+
+            consumerErrorStrategy.Dispose();
+
+            var ackStrategy = consumerErrorStrategy.HandleConsumerError(context, exception);
+
+            connectionFactory.DidNotReceive().CreateConnection();
+
+            Assert.Equal(AckStrategies.NackWithRequeue, ackStrategy);
         }
     }
 }

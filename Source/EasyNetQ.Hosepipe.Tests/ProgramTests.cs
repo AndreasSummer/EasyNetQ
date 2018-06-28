@@ -3,11 +3,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using NUnit.Framework;
+
+using EasyNetQ.Consumer;
+
+using Xunit;
 
 namespace EasyNetQ.Hosepipe.Tests
 {
-    [TestFixture]
     public class ProgramTests
     {
         private Program program;
@@ -17,20 +19,21 @@ namespace EasyNetQ.Hosepipe.Tests
         private MockQueueInsertion queueInsertion;
         private MockErrorRetry errorRetry;
         private Conventions conventions;
+        private IErrorMessageSerializer defaultErrorMessageSerializer;
 
-        [SetUp]
-        public void SetUp()
+        public ProgramTests()
         {
             messageWriter = new MockMessageWriter();
             queueRetrieval = new MockQueueRetrieval();
             messageReader = new MockMessageReader();
             queueInsertion = new MockQueueInsertion();
             errorRetry = new MockErrorRetry();
-            conventions = new Conventions(new TypeNameSerializer());
+            conventions = new Conventions(new LegacyTypeNameSerializer());
+            defaultErrorMessageSerializer = new DefaultErrorMessageSerializer();
 
             program = new Program(
-                new ArgParser(), 
-                queueRetrieval, 
+                new ArgParser(),
+                queueRetrieval,
                 messageWriter,
                 messageReader,
                 queueInsertion,
@@ -38,10 +41,10 @@ namespace EasyNetQ.Hosepipe.Tests
                 conventions);
         }
 
-        private readonly string expectedDumpOutput = 
-            "2 Messages from queue 'EasyNetQ_Default_Error_Queue'\r\noutput to directory '" + Environment.CurrentDirectory + "'\r\n";
+        private readonly string expectedDumpOutput =
+            "2 Messages from queue 'EasyNetQ_Default_Error_Queue'\r\noutput to directory '" + Directory.GetCurrentDirectory() + "'\r\n";
 
-        [Test]
+        [Fact]
         public void Should_output_messages_to_directory_with_dump()
         {
             var args = new[]
@@ -62,10 +65,10 @@ namespace EasyNetQ.Hosepipe.Tests
             messageWriter.Parameters.HostName.ShouldEqual("localhost");
         }
 
-        private readonly string expectedInsertOutput = 
-            "2 Messages from directory '" + Environment.CurrentDirectory + "'\r\ninserted into queue ''\r\n";
+        private readonly string expectedInsertOutput =
+            "2 Messages from directory '" + Directory.GetCurrentDirectory() + "'\r\ninserted into queue ''\r\n";
 
-        [Test]
+        [Fact]
         public void Should_insert_messages_with_insert()
         {
             var args = new[]
@@ -84,11 +87,11 @@ namespace EasyNetQ.Hosepipe.Tests
             messageReader.Parameters.HostName.ShouldEqual("localhost");
         }
 
-        private readonly string expectedRetryOutput = 
-            "2 Error messages from directory '" + Environment.CurrentDirectory + "' republished\r\n";
+        private readonly string expectedRetryOutput =
+            "2 Error messages from directory '" + Directory.GetCurrentDirectory() + "' republished\r\n";
 
-        
-        [Test]
+
+        [Fact]
         public void Should_retry_errors_with_retry()
         {
             var args = new[]
@@ -126,8 +129,8 @@ namespace EasyNetQ.Hosepipe.Tests
     {
         public IEnumerable<HosepipeMessage> GetMessagesFromQueue(QueueParameters parameters)
         {
-            yield return new HosepipeMessage("some message", new MessageProperties(), Helper.CreateMessageRecievedInfo());
-            yield return new HosepipeMessage("some message", new MessageProperties(), Helper.CreateMessageRecievedInfo());
+            yield return new HosepipeMessage("some message", new MessageProperties(), Helper.CreateMessageReceivedInfo());
+            yield return new HosepipeMessage("some message", new MessageProperties(), Helper.CreateMessageReceivedInfo());
         }
     }
 
@@ -138,8 +141,8 @@ namespace EasyNetQ.Hosepipe.Tests
         public IEnumerable<HosepipeMessage> ReadMessages(QueueParameters parameters)
         {
             Parameters = parameters;
-            yield return new HosepipeMessage("some message", new MessageProperties(), Helper.CreateMessageRecievedInfo());
-            yield return new HosepipeMessage("some message", new MessageProperties(), Helper.CreateMessageRecievedInfo());
+            yield return new HosepipeMessage("some message", new MessageProperties(), Helper.CreateMessageReceivedInfo());
+            yield return new HosepipeMessage("some message", new MessageProperties(), Helper.CreateMessageReceivedInfo());
         }
 
         public IEnumerable<HosepipeMessage> ReadMessages(QueueParameters parameters, string messageName)

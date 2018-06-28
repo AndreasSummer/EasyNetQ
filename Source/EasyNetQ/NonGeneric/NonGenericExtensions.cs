@@ -3,21 +3,24 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using EasyNetQ.FluentConfiguration;
+using EasyNetQ.Internals;
+using EasyNetQ.Producer;
+using EasyNetQ.Topology;
 
 namespace EasyNetQ.NonGeneric
 {
     public static class NonGenericExtensions
     {
-        public static IDisposable Subscribe(this IBus bus, Type messageType, string subscriptionId, Action<object> onMessage)
+        public static ISubscriptionResult Subscribe(this IBus bus, Type messageType, string subscriptionId, Action<object> onMessage)
         {
             return Subscribe(bus, messageType, subscriptionId, onMessage, configuration => { });
         }
 
-        public static IDisposable Subscribe(
-            this IBus bus, 
-            Type messageType, 
-            string subscriptionId, 
-            Action<object> onMessage, 
+        public static ISubscriptionResult Subscribe(
+            this IBus bus,
+            Type messageType,
+            string subscriptionId,
+            Action<object> onMessage,
             Action<ISubscriptionConfiguration> configure)
         {
             Preconditions.CheckNotNull(onMessage, "onMessage");
@@ -27,7 +30,7 @@ namespace EasyNetQ.NonGeneric
             return SubscribeAsync(bus, messageType, subscriptionId, asyncOnMessage, configure);
         }
 
-        public static IDisposable SubscribeAsync(
+        public static ISubscriptionResult SubscribeAsync(
             this IBus bus,
             Type messageType,
             string subscriptionId,
@@ -36,11 +39,11 @@ namespace EasyNetQ.NonGeneric
             return SubscribeAsync(bus, messageType, subscriptionId, onMessage, configuration => { });
         }
 
-        public static IDisposable SubscribeAsync(
-            this IBus bus, 
-            Type messageType, 
-            string subscriptionId, 
-            Func<object, Task> onMessage, 
+        public static ISubscriptionResult SubscribeAsync(
+            this IBus bus,
+            Type messageType,
+            string subscriptionId,
+            Func<object, Task> onMessage,
             Action<ISubscriptionConfiguration> configure)
         {
             Preconditions.CheckNotNull(bus, "bus");
@@ -59,7 +62,41 @@ namespace EasyNetQ.NonGeneric
             }
 
             var subscribeMethod = subscribeMethodOpen.MakeGenericMethod(messageType);
-            return (IDisposable)subscribeMethod.Invoke(bus, new object[] { subscriptionId, onMessage, configure });
+            return (ISubscriptionResult)subscribeMethod.Invoke(bus, new object[] { subscriptionId, onMessage, configure });
+        } 
+
+        public static void Publish(this IBus bus, Type messageType, object message)
+        {
+            PublishAsync(bus, messageType, message).GetAwaiter().GetResult();
+        }
+
+        public static void Publish(this IBus bus, Type messageType, object message, string topic)
+        {
+            PublishAsync(bus, messageType, message, topic).GetAwaiter().GetResult();
+        }
+
+        public static Task PublishAsync(this IBus bus, Type messageType, object message)
+        {
+            var conventions = bus.Advanced.Container.Resolve<IConventions>();
+            return PublishAsync(bus, messageType, message, conventions.TopicNamingConvention(messageType));
+        }
+
+        public static Task PublishAsync(this IBus bus, Type messageType, object message, string topic)
+        {
+            Preconditions.CheckNotNull(message, "message");
+            Preconditions.CheckNotNull(topic, "topic");
+            Preconditions.CheckNotNull(messageType, "messageType");
+            Preconditions.CheckTypeMatches(messageType, message, "message", "message must be of type " + messageType);
+            
+            var advancedBus = bus.Advanced.Container.Resolve<IAdvancedBus>();
+            var publishExchangeDeclareStrategy = bus.Advanced.Container.Resolve<IPublishExchangeDeclareStrategy>();
+            var messageDeliveryModeStrategy = bus.Advanced.Container.Resolve<IMessageDeliveryModeStrategy>();
+            
+            var exchange = publishExchangeDeclareStrategy.DeclareExchange(messageType, ExchangeType.Topic);
+            var easyNetQMessage = MessageFactory.CreateInstance(messageType, message);
+            easyNetQMessage.Properties.DeliveryMode = messageDeliveryModeStrategy.GetDeliveryMode(messageType);
+
+            return advancedBus.PublishAsync(exchange, topic, false, easyNetQMessage);
         }
 
         private static bool HasCorrectParameters(MethodInfo methodInfo)

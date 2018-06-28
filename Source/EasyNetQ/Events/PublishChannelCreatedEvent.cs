@@ -4,11 +4,11 @@ namespace EasyNetQ.Events
 {
     public class PublishChannelCreatedEvent
     {
-        public IModel Channel { get; private set; }
+        public IModel Channel { get; }
 
         public PublishChannelCreatedEvent(IModel channel)
         {
             Channel = channel;
         }
     }
-}
+}   
